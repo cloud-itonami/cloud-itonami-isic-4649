@@ -1,0 +1,411 @@
+(ns housewaretrade.governor
+  "Consumer Product Safety Governor -- the independent compliance layer
+  that earns the HousewareTradeAdvisor the right to commit. The LLM has
+  no notion of jurisdictional consumer-product-safety law, whether a
+  counterparty's credit has actually been cleared, whether contract
+  terms are actually on file, whether THIS specific SKU actually has a
+  valid Children's Product Certificate on file (when it is a children's
+  product), whether THIS specific SKU is currently subject to an
+  ACTIVE, UNRESOLVED product-safety recall, whether OFAC / equivalent
+  sanctions screening has actually been passed, or when an act stops
+  being a draft and becomes a real dispatch of physical household goods
+  or a real invoice settlement, so this MUST be a separate system able
+  to *reject* a proposal and fall back to HOLD.
+
+  Like every principal-trading sibling's own governor, this
+  household-goods-wholesale vertical has NO pre-existing household-
+  goods-trading capability library to delegate to -- so the domain
+  checks (credit-clearance, contract-on-file, children's-product
+  certification, active-recall status, sanctions-screening) are direct
+  entity boolean/enum reads off the `household-order` record, evaluated
+  directly here, NOT delegated to a separate library's validated
+  function.
+
+  `:itonami.blueprint/governor` is `:consumer-product-safety-governor`,
+  a fresh independent build following the SAME governed-actor
+  architecture (langgraph StateGraph + independent Governor + Phase
+  0->3 rollout) established by `cloud-itonami-isic-6511` and applied by
+  the fuel-wholesale (`cloud-itonami-isic-4671`), ag-machinery-wholesale
+  (`cloud-itonami-isic-4653`) and telecom/electronics-wholesale
+  (`cloud-itonami-isic-4652`) siblings.
+
+  ============================================================
+  CRITICAL STRUCTURAL DECISION: two domain-defining checks, with two
+  GENUINELY DIFFERENT temporal shapes -- neither forced into the other's
+  mold, and neither forced into any prior sibling's own shape.
+  ============================================================
+
+  This vertical's defining regulatory content splits into TWO real,
+  distinct US CPSC mechanics (see `housewaretrade.facts` for the full
+  citations), and this build deliberately does NOT fold them into one
+  rule, because they operate on DIFFERENT real-world timelines:
+
+  1. `childrens-product-certificate-missing-violations` -- a
+     PRE-SHIPMENT product-certification gate, type-gated on the
+     order's OWN `:childrens-product?` boolean (is this SKU intended
+     for use by children 12 and under -- CPSIA, 15 U.S.C. §1278a
+     total-lead-content limit; 16 C.F.R. Part 1307 phthalate
+     restrictions). Structurally this is closest to the metal-
+     wholesale sibling's own `conflict-minerals-provenance-unverified`
+     shape (a SINGLE check, gated on a SINGLE fact, that internally
+     folds TWO evidentiary sub-facts into ONE rule) -- NOT the
+     ag-machinery sibling's own shape (TWO SEPARATE checks on TWO
+     INDEPENDENT gating booleans). Why the metal-wholesale shape fits
+     here and the ag-machinery shape does NOT: `:lead-phthalate-
+     tested?` (third-party lab testing) and `:childrens-product-
+     certificate-on-file?` (the Children's Product Certificate itself,
+     CPSA §14, 15 U.S.C. §2063, 16 C.F.R. Parts 1107/1110) are TWO
+     EVIDENTIARY ARMS OF THE SAME REAL-WORLD DETERMINATION -- a CPC
+     cannot exist without the underlying lab test, and a lab test
+     without a filed CPC is not yet a compliant certificate either.
+     Missing EITHER one is EQUALLY 'no valid CPC on file', because both
+     arms belong to the SAME underlying act (contrast the ag-machinery
+     sibling's emissions-certificate/ROPS-certificate pair, which are
+     governed by TWO GENUINELY DIFFERENT regulatory regimes -- air
+     quality vs. operator safety -- triggered by TWO INDEPENDENT
+     machine properties that can vary separately). `ho-6`/`ho-7` in
+     `housewaretrade.store/demo-data` prove the fold: `ho-6` (lab-tested
+     AND CPC on file) dispatches cleanly; `ho-7` (lab-tested but NO CPC
+     actually on file) HARD-holds -- proving the rule requires BOTH
+     arms, not merely that testing occurred.
+
+  2. `active-recall-unresolved-violations` -- THIS vertical's own
+     genuine structural novelty relative to EVERY prior sibling's
+     domain-defining check: a POST-HOC, discovered-defect FLAG, not a
+     pre-shipment certificate at all. Grounded in Consumer Product
+     Safety Act §15(b), 15 U.S.C. §2064(b): a manufacturer, importer,
+     distributor or retailer must report to CPSC within 24 HOURS of
+     obtaining information reasonably supporting the conclusion a
+     product contains a defect that could create a substantial risk of
+     injury -- and once CPSC has accepted a recall, dispatching MORE of
+     that SAME SKU (or settling an invoice for it) is exactly the harm
+     the reporting duty exists to prevent. A pre-shipment-certificate
+     model (check once, before first sale, like the CPC above) does NOT
+     match this mechanic: a SKU can dispatch CLEANLY today and have a
+     recall open on it NEXT WEEK, discovered from field data that did
+     not exist at the time of the original certification. So this
+     build models it as a RE-CHECKED FLAG on the order's own
+     `:recall-status` fact (`:none`/`:open`/`:resolved` -- an ENUM, not
+     a boolean, because a SKU's recall history is not binary: no
+     history at all is a genuinely different, and more common, state
+     than a resolved recall). This reuses the SAME open-flag-unresolved
+     DISCIPLINE `counterparty-sanctions-flag-unresolved-violations`
+     below already establishes fleet-wide (see Decision 5 in
+     `docs/adr/0001-architecture.md`), but applied to a NEW AXIS: the
+     PRODUCT/SKU itself, not the counterparty. This vertical therefore
+     has TWO independent 'flag' axes -- WHO you are selling to
+     (counterparty sanctions) and WHAT you are selling (product
+     recall) -- evaluated at BOTH `:delivery/dispatch` and
+     `:invoice/settle`, for the SAME reason sanctions is: both are
+     facts that can newly emerge BETWEEN a clean dispatch and a later
+     invoice settlement, unlike credit-clearance/contract-on-file/
+     children's-product-certification, which are onboarding-time facts
+     checked once, at dispatch. `housewaretrade.store/demo-data`'s
+     `ho-8` (an active, unresolved recall) HARD-holds at
+     `:delivery/dispatch`; `test/housewaretrade/
+     governor_contract_test.clj`'s
+     `recall-resolution-allows-dispatch-on-the-same-sku` proves the
+     SAME order, patched to `:recall-status :resolved` via
+     `:order/intake` (the SAME low-stakes upsert op every sibling's
+     advisor already uses to normalize order-directory patches --
+     no new op is needed for a compliance officer to record a recall's
+     resolution), dispatches CLEANLY afterward -- the exact
+     open-recall-then-resolved lifecycle proof this vertical's own
+     regulatory mechanic calls for.
+
+  IMPORTANT DISAMBIGUATION from `cloud-itonami-isic-6492`'s real
+  status-lifecycle bug (ADR-2607071320), which this fleet's every prior
+  governor's guards have since avoided by using DEDICATED booleans
+  (`:dispatched?`/`:invoiced?`) instead of a single `:status` value for
+  double-actuation guards: `:recall-status` here is NOT such a guard. It
+  is a THIRD kind of domain fact (see `housewaretrade.store` namespace
+  docstring), parallel in KIND to `:jurisdiction` or
+  `:sanctions-screened?` -- external regulatory ground truth about the
+  order -- never read by `already-dispatched-violations`/
+  `already-invoiced-violations` below, which remain dedicated-boolean
+  reads exactly like every sibling.
+
+  Eight checks, in priority order, ALL HARD violations: a human approver
+  CANNOT override them. The confidence/actuation gate is SOFT: it asks
+  a human to look (low confidence / actuation), and the human may
+  approve -- but see `housewaretrade.phase`: for `:stake :delivery/
+  dispatch`/`:invoice/settle` (a real dispatch or invoice settlement) NO
+  phase ever allows auto-commit either. Two independent layers agree
+  that actuation is always a human call.
+
+    1. Spec-basis                  -- did the jurisdiction proposal cite
+                                       an OFFICIAL source
+                                       (`housewaretrade.facts`), or
+                                       invent one?
+    2. Evidence incomplete         -- for `:delivery/dispatch`/
+                                       `:invoice/settle`, has the
+                                       jurisdiction actually been
+                                       verified with a full GENERIC
+                                       counterparty-diligence evidence
+                                       checklist on file? Deliberately
+                                       does NOT include the children's-
+                                       product certificate or recall
+                                       status -- those are checks 5/6
+                                       below.
+    3. Credit uncleared            -- for `:delivery/dispatch`, the
+                                       counterparty's credit has NOT been
+                                       cleared (the leasing collateral-
+                                       coverage discipline, applied to
+                                       counterparty credit). Evaluated
+                                       before the goods leave.
+    4. Contract missing            -- for `:delivery/dispatch`, no
+                                       contract-terms are on file for the
+                                       order. Evaluated before the goods
+                                       leave.
+    5. Children's Product
+       Certificate missing         -- for `:delivery/dispatch`, WHEN
+                                       `:childrens-product?` is true, no
+                                       valid Children's Product
+                                       Certificate (BOTH `:lead-
+                                       phthalate-tested?` AND
+                                       `:childrens-product-certificate-
+                                       on-file?`) is on file. NO-OP for a
+                                       general household good
+                                       (`:childrens-product?` false) --
+                                       THIS check has no analog in ANY
+                                       prior sibling's governor: it is
+                                       this vertical's own PRE-SHIPMENT
+                                       defining regulatory content. See
+                                       'CRITICAL STRUCTURAL DECISION'
+                                       above.
+    6. Active recall unresolved    -- for `:delivery/dispatch` AND
+                                       `:invoice/settle`, the order's SKU
+                                       has an ACTIVE, unresolved
+                                       CPSC-style recall on file
+                                       (`:recall-status :open`). THIS is
+                                       this vertical's SECOND, POST-HOC
+                                       defining regulatory content --
+                                       see 'CRITICAL STRUCTURAL DECISION'
+                                       above for why this is a re-checked
+                                       FLAG, not a pre-shipment
+                                       certificate.
+    7. Counterparty sanctions flag
+       unresolved                    -- for `:delivery/dispatch` and
+                                       `:invoice/settle`, the counterparty
+                                       has NOT passed OFAC / equivalent
+                                       sanctions screening -- a HARD,
+                                       un-overridable hold. Evaluated
+                                       UNCONDITIONALLY at both actuation
+                                       ops.
+    8. Confidence floor / actuation
+       gate                          -- LLM confidence below threshold,
+                                       OR the op is `:delivery/dispatch`/
+                                       `:invoice/settle` (REAL acts)
+                                       -> escalate.
+
+  Two more guards, double-dispatch/double-invoice prevention, are
+  enforced but NOT listed as numbered HARD checks above because they
+  need no upstream comparison at all -- `already-dispatched-violations`/
+  `already-invoiced-violations` refuse to dispatch/invoice the SAME
+  household-order twice, off dedicated `:dispatched?`/`:invoiced?` facts
+  (never a `:status` value) -- the SAME 'check a dedicated boolean, not
+  status' discipline every prior governor's guards establish, informed
+  by `cloud-itonami-isic-6492`'s status-lifecycle bug
+  (ADR-2607071320)."
+  (:require [housewaretrade.facts :as facts]
+            [housewaretrade.store :as store]))
+
+(def confidence-floor 0.6)
+
+(def high-stakes
+  "Stakes grave enough to always require a human, even when clean.
+  Dispatching real physical household goods (housewares, small
+  appliances, furniture, toys) from the wholesale distribution center to
+  a counterparty and settling a real invoice (real money moving between
+  counterparty and wholesaler) are the two real-world actuation events
+  this actor performs -- a two-member set, matching every dual-actuation
+  sibling's own shape."
+  #{:delivery/dispatch :invoice/settle})
+
+;; ----------------------------- checks -----------------------------
+
+(defn- spec-basis-violations
+  "A `:safety/verify` (or `:delivery/dispatch`/`:invoice/settle`)
+  proposal with no spec-basis citation is a HARD violation -- never
+  invent a jurisdiction's consumer-product-safety / sanctions
+  requirements."
+  [{:keys [op]} proposal]
+  (when (contains? #{:safety/verify :delivery/dispatch :invoice/settle} op)
+    (let [value (:value proposal)]
+      (when (or (empty? (:cites proposal))
+                (and (contains? value :spec-basis) (nil? (:spec-basis value))))
+        [{:rule :no-spec-basis
+          :detail "公式spec-basisの引用が無い提案は法域要件として扱えない"}]))))
+
+(defn- evidence-incomplete-violations
+  "For `:delivery/dispatch`/`:invoice/settle`, the jurisdiction's
+  required GENERIC counterparty-diligence evidence (credit-clearance
+  record, contract/PO, sanctions-screening record) must actually be
+  satisfied -- do not trust the advisor's self-reported confidence
+  alone. Deliberately does NOT check children's-product-certificate or
+  active-recall status -- those are
+  `childrens-product-certificate-missing-violations`/
+  `active-recall-unresolved-violations` below, each its own dedicated
+  check rather than a checklist item."
+  [{:keys [op subject]} st]
+  (when (contains? #{:delivery/dispatch :invoice/settle} op)
+    (let [ho (store/household-order st subject)
+          assessment (store/assessment-of st subject)]
+      (when-not (and assessment
+                     (facts/required-evidence-satisfied?
+                      (:jurisdiction ho) (:checklist assessment)))
+        [{:rule :evidence-incomplete
+          :detail "法域の必要書類(信用審査記録/契約書またはPO/制裁スクリーニング記録)が充足していない状態での提案"}]))))
+
+(defn- credit-uncleared-violations
+  "For `:delivery/dispatch`, refuses to dispatch real household goods to
+  a counterparty whose credit has NOT been cleared -- counterparty
+  credit not cleared (the leasing collateral-coverage discipline,
+  applied to counterparty credit). Evaluated at the distribution center,
+  ahead of any physical handoff."
+  [{:keys [op subject]} st]
+  (when (= op :delivery/dispatch)
+    (let [ho (store/household-order st subject)]
+      (when (not (true? (:credit-cleared? ho)))
+        [{:rule :credit-uncleared
+          :detail (str subject " の取引先信用審査(credit-clearance)が未了 -- 出荷提案は進められない")}]))))
+
+(defn- contract-missing-violations
+  "For `:delivery/dispatch`, refuses to dispatch real household goods
+  when no contract-terms are on file for the order."
+  [{:keys [op subject]} st]
+  (when (= op :delivery/dispatch)
+    (let [ho (store/household-order st subject)]
+      (when (or (nil? (:contract-terms ho)) (= "" (:contract-terms ho)))
+        [{:rule :contract-missing
+          :detail (str subject " に契約条項(contract-terms)の記録が無い -- 出荷提案は進められない")}]))))
+
+(defn- childrens-product-certificate-missing-violations
+  "For `:delivery/dispatch`, WHEN `:childrens-product?` is true, refuses
+  to dispatch a SKU with no valid Children's Product Certificate on
+  file -- folding BOTH evidentiary arms of the SAME CPSA §14 / 16
+  C.F.R. Parts 1107/1110 determination into ONE rule:
+  `:lead-phthalate-tested?` (third-party lab testing against the CPSIA
+  100 ppm total-lead-content limit, 15 U.S.C. §1278a, and the 16 C.F.R.
+  Part 1307 phthalate restrictions) AND
+  `:childrens-product-certificate-on-file?` (the certificate itself).
+  THIS check has no analog in ANY prior sibling's governor: it is this
+  vertical's own PRE-SHIPMENT defining regulatory content, and is a
+  genuine NO-OP for a general household good (`:childrens-product?`
+  false) -- `housewaretrade.store/demo-data`'s `ho-1` (general household
+  good, cookware, NEITHER evidentiary sub-fact on file) proves this
+  directly: the order still dispatches cleanly, because a general
+  household good has no CPC to certify against in the first place. See
+  namespace docstring 'CRITICAL STRUCTURAL DECISION' for why this is ONE
+  check folding two evidentiary arms, unlike
+  `active-recall-unresolved-violations` below (a genuinely separate,
+  post-hoc concern) and unlike the ag-machinery sibling's own TWO-
+  independent-check shape."
+  [{:keys [op subject]} st]
+  (when (= op :delivery/dispatch)
+    (let [ho (store/household-order st subject)]
+      (when (and (true? (:childrens-product? ho))
+                 (not (and (true? (:lead-phthalate-tested? ho))
+                           (true? (:childrens-product-certificate-on-file? ho)))))
+        [{:rule :childrens-product-certificate-missing
+          :detail (str subject " (" (name (:product-category ho)) ") は子供向け製品だが"
+                       "鉛/フタル酸エステル試験および児童用製品証明書(CPC)の記録が無い -- 出荷提案は進められない")}]))))
+
+(defn- active-recall-unresolved-violations
+  "For `:delivery/dispatch` AND `:invoice/settle`, refuses to
+  dispatch/invoice a SKU with an ACTIVE, unresolved CPSC-style recall on
+  file (`:recall-status :open`) -- grounded in Consumer Product Safety
+  Act §15(b), 15 U.S.C. §2064(b) (the 24-hour substantial-product-
+  hazard report). THIS is a POST-HOC, discovered-defect flag, evaluated
+  at BOTH actuation ops -- unlike
+  `childrens-product-certificate-missing-violations` above (a
+  PRE-shipment concern, dispatch-only), a recall can be discovered from
+  field data AFTER a SKU has already dispatched cleanly in the past, so
+  this check must be re-run at invoice-settlement time too, the SAME
+  span as `counterparty-sanctions-flag-unresolved-violations` below and
+  for the SAME reason. `:recall-status :none` (no history) and
+  `:recall-status :resolved` (a closed recall) BOTH dispatch/invoice
+  cleanly -- only `:open` blocks. See namespace docstring 'CRITICAL
+  STRUCTURAL DECISION' for the full pre-shipment-certificate-vs-
+  post-hoc-recall design reasoning, and
+  `test/housewaretrade/governor_contract_test.clj`'s
+  `recall-resolution-allows-dispatch-on-the-same-sku` for the end-to-end
+  open -> resolved proof on the SAME order."
+  [{:keys [op subject]} st]
+  (when (contains? #{:delivery/dispatch :invoice/settle} op)
+    (let [ho (store/household-order st subject)]
+      (when (= :open (:recall-status ho))
+        [{:rule :active-recall-unresolved
+          :detail (str subject " (SKU=" (:sku ho) ") には未解決のリコール(CPSC等)が"
+                       "有効中 -- 出荷・請求提案は進められない")}]))))
+
+(defn- counterparty-sanctions-flag-unresolved-violations
+  "For `:delivery/dispatch` and `:invoice/settle`, an unresolved
+  sanctions-screening flag -- the counterparty has NOT passed OFAC /
+  equivalent sanctions screening -- is a HARD, un-overridable hold.
+  Evaluated UNCONDITIONALLY at both actuation ops: neither goods nor
+  money moves against an unscreened counterparty."
+  [{:keys [op subject]} st]
+  (when (contains? #{:delivery/dispatch :invoice/settle} op)
+    (let [ho (store/household-order st subject)]
+      (when (not (true? (:sanctions-screened? ho)))
+        [{:rule :counterparty-sanctions-flag-unresolved
+          :detail (str subject " の取引先制裁スクリーニング(OFAC等)が未了 -- 出荷・請求提案は進められない")}]))))
+
+(defn- already-dispatched-violations
+  "For `:delivery/dispatch`, refuses to dispatch the SAME household-
+  order twice, off a dedicated `:dispatched?` fact (never a `:status`
+  value)."
+  [{:keys [op subject]} st]
+  (when (= op :delivery/dispatch)
+    (when (store/household-order-already-dispatched? st subject)
+      [{:rule :already-dispatched
+        :detail (str subject " は既に出荷済み")}])))
+
+(defn- already-invoiced-violations
+  "For `:invoice/settle`, refuses to settle the SAME household-order's
+  invoice twice, off a dedicated `:invoiced?` fact (never a `:status`
+  value)."
+  [{:keys [op subject]} st]
+  (when (= op :invoice/settle)
+    (when (store/household-order-already-invoiced? st subject)
+      [{:rule :already-invoiced
+        :detail (str subject " は既に請求済み")}])))
+
+(defn check
+  "Censors a HousewareTradeAdvisor proposal against the governor rules.
+  Returns {:ok? bool :violations [..] :confidence c :escalate? bool
+  :high-stakes? bool :hard? bool}."
+  [request _context proposal st]
+  (let [hard (into []
+                   (concat (spec-basis-violations request proposal)
+                           (evidence-incomplete-violations request st)
+                           (credit-uncleared-violations request st)
+                           (contract-missing-violations request st)
+                           (childrens-product-certificate-missing-violations request st)
+                           (active-recall-unresolved-violations request st)
+                           (counterparty-sanctions-flag-unresolved-violations request st)
+                           (already-dispatched-violations request st)
+                           (already-invoiced-violations request st)))
+        conf (:confidence proposal 0.0)
+        low? (< conf confidence-floor)
+        stakes? (boolean (high-stakes (:stake proposal)))
+        hard? (boolean (seq hard))]
+    {:ok?          (and (not hard?) (not low?) (not stakes?))
+     :violations   hard
+     :confidence   conf
+     :hard?        hard?
+     :escalate?    (and (not hard?) (or low? stakes?))
+     :high-stakes? stakes?}))
+
+(defn hold-fact
+  "The audit fact written when a proposal is rejected (HOLD)."
+  [request context verdict]
+  {:t          :governor-hold
+   :op         (:op request)
+   :actor      (:actor-id context)
+   :subject    (:subject request)
+   :disposition :hold
+   :basis      (mapv :rule (:violations verdict))
+   :violations (:violations verdict)
+   :confidence (:confidence verdict)})

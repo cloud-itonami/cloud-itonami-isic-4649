@@ -1,0 +1,438 @@
+(ns housewaretrade.store
+  "SSoT for the household-goods-wholesale actor, behind a `Store`
+  protocol so the backend is a swap, not a rewrite -- the same seam
+  every prior `cloud-itonami-isic-*` actor in this fleet uses.
+
+    - `MemStore`     -- atom of EDN. The deterministic default for
+                        dev/tests/demo (no deps).
+    - `DatomicStore` -- backed by `langchain.db`, a Datomic-API-compatible
+                        EAV store (datalog q / pull / upsert). Pure `.cljc`,
+                        so it runs offline AND can be pointed at a real
+                        Datomic Local or a kotoba-server pod by swapping
+                        `langchain.db`'s `:db-api` (see langchain.kotoba-db).
+
+  Both implement the same protocol and pass the same contract
+  (test/housewaretrade/store_contract_test.clj), which is the whole
+  point: the actor, the Consumer Product Safety Governor and the audit
+  ledger never know which SSoT they run on.
+
+  Like the fuel-wholesale / ag-machinery-wholesale siblings' own order
+  entities, this vertical's `dispatch` and `settle` actuation events
+  apply SEQUENTIALLY to the SAME `household-order` -- physical dispatch
+  happens first (goods leave the wholesale distribution center),
+  invoice settlement happens later, on the same order record. This
+  matches the sequential dual-actuation shape, with dedicated
+  double-actuation-guard booleans (`:dispatched?`/`:invoiced?`, never a
+  `:status` value).
+
+  The `household-order` record carries THREE kinds of domain fact,
+  deliberately distinguished (see `housewaretrade.governor` for how each
+  is used):
+    - a TYPE gate, `:childrens-product?` -- is this SKU a product
+      intended for use by children 12 and under, which triggers the
+      CPSIA lead/phthalate-testing + Children's Product Certificate
+      regime? Together with its two evidentiary sub-facts,
+      `:lead-phthalate-tested?` and
+      `:childrens-product-certificate-on-file?`, this is a PRE-SHIPMENT
+      certification concern -- evaluated once, at `:delivery/dispatch`.
+    - a re-checked FLAG, `:recall-status` (`:none`/`:open`/`:resolved`)
+      -- unlike every boolean fact above, this is an ENUM, not a
+      boolean, because 'has this SKU ever had a recall' is not a
+      binary: a SKU can have NO history (`:none`), an ACTIVE unresolved
+      CPSC-style recall (`:open`, which HARD-blocks actuation), or a
+      recall that has since been RESOLVED/closed (`:resolved`, which
+      dispatches cleanly again). This is a POST-HOC, discovered-defect
+      concern (grounded in the US Consumer Product Safety Act §15(b), 15
+      U.S.C. §2064(b), substantial-product-hazard reporting duty) --
+      structurally unlike the pre-shipment certification facts above,
+      it can change AFTER a SKU has already dispatched cleanly in the
+      past, so it is re-evaluated at BOTH `:delivery/dispatch` and
+      `:invoice/settle`, the SAME span as `:sanctions-screened?` below,
+      not just at dispatch like the certification/credit/contract
+      facts. IMPORTANT: `:recall-status` is NOT a double-actuation-guard
+      `:status` value in the sense `cloud-itonami-isic-6492`'s real bug
+      (ADR-2607071320) warned this fleet off of -- the double-actuation
+      guards for THIS entity remain the dedicated `:dispatched?`/
+      `:invoiced?` booleans below, exactly like every sibling. See
+      `housewaretrade.governor` namespace docstring for the full
+      pre-shipment-certificate-vs-post-hoc-recall design reasoning.
+    - the GENERIC counterparty-diligence facts every sibling in this
+      fleet carries -- `:credit-cleared?`, `:contract-terms`,
+      `:sanctions-screened?`.
+
+  The ledger stays append-only on every backend: 'which household-order
+  was verified for a jurisdiction with no official spec-basis, which
+  counterparty had credit-uncleared / no contract / a missing Children's
+  Product Certificate / an open unresolved recall / an unresolved
+  sanctions-screening flag, which order was dispatched, which invoice
+  was settled, on what jurisdictional basis, approved by whom' is always
+  a query over an immutable log -- the audit trail a regulator, a
+  counterparty, or an operator trusting a household-goods-wholesale
+  actor needs, and the evidence an operator needs if a dispatch or an
+  invoice is later disputed."
+  (:require #?(:clj  [clojure.edn :as edn]
+               :cljs [cljs.reader :as edn])
+            [housewaretrade.registry :as registry]
+            [langchain.db :as d]))
+
+(defprotocol Store
+  (household-order [s id])
+  (all-household-orders [s])
+  (assessment-of [s household-order-id] "committed safety assessment, or nil")
+  (ledger [s])
+  (dispatch-history [s] "the append-only household-goods-dispatch history (housewaretrade.registry drafts)")
+  (invoice-history [s] "the append-only household-goods-invoice history (housewaretrade.registry drafts)")
+  (next-dispatch-sequence [s jurisdiction] "next dispatch-number sequence for a jurisdiction")
+  (next-invoice-sequence [s jurisdiction] "next invoice-number sequence for a jurisdiction")
+  (household-order-already-dispatched? [s household-order-id] "has these goods already been dispatched?")
+  (household-order-already-invoiced? [s household-order-id] "has this order's invoice already been settled?")
+  (commit-record! [s record] "apply a committed op's record to the SSoT")
+  (append-ledger! [s fact]   "append one immutable decision fact")
+  (with-household-orders [s household-orders] "replace/seed the household-order directory (map id->household-order)"))
+
+;; ----------------------------- demo data -----------------------------
+
+(defn- base-order
+  "The neutral, clean household-order shape (every field in its safe
+  state), so each demo order below isolates exactly ONE failure mode by
+  overriding a single field. The base shape is a GENERAL household good
+  (cookware -- not a children's product, no recall history) -- both
+  certification-related facts are their true no-op defaults, proving
+  the common case carries no certification overhead at all."
+  [overrides]
+  (merge {:id "ho-1" :order-id "HO-2026-0001" :product-category :cookware
+          :sku "HG-SKU-10001"
+          :counterparty "Akita Household Goods Trading Co"
+          :price 4200.00 :contract-terms "FOB distribution center, net 30 days"
+          :credit-cleared? true :sanctions-screened? true
+          :childrens-product? false
+          :lead-phthalate-tested? false
+          :childrens-product-certificate-on-file? false
+          :recall-status :none
+          :dispatched? false :invoiced? false
+          :jurisdiction "USA" :status :intake
+          :dispatch-number nil :invoice-number nil}
+         overrides))
+
+(defn demo-data
+  "A small, self-contained household-order set covering both actuation
+  lifecycles (dispatch, invoice settlement), the Consumer Product Safety
+  Governor's own generic checks, AND -- the defining proof of this
+  vertical -- the type-gated children's-product-certificate check
+  (`ho-6`/`ho-7`) and the post-hoc active-recall flag check (`ho-8`):
+
+    - `ho-1` (general household good, cookware, no children's-product
+      overhead, no recall history) dispatches CLEANLY -- proving a
+      general household good is NEVER blocked by the children's-product-
+      certificate check, even with neither evidentiary sub-fact on file.
+    - `ho-6` (a children's product, a toy, WITH both
+      `:lead-phthalate-tested?` and
+      `:childrens-product-certificate-on-file?` true) dispatches
+      CLEANLY -- proving a fully-certified children's product is not
+      penalized merely for being a children's product.
+    - `ho-7` (a children's product, a toy, lab-tested but with NO
+      Children's Product Certificate actually on file --
+      `:lead-phthalate-tested?` true, `:childrens-product-certificate-
+      on-file?` false) HARD-holds on
+      `:childrens-product-certificate-missing` -- proving the fold
+      requires the ACTUAL certificate on file, not merely that the
+      underlying lab tests were run (a realistic gap: testing often
+      completes before the CPC paperwork itself is finalized).
+    - `ho-8` (a general household good, a small appliance, with an
+      ACTIVE unresolved recall, `:recall-status :open`) HARD-holds on
+      `:active-recall-unresolved` -- proving the recall flag blocks
+      dispatch/invoice INDEPENDENTLY of the children's-product gate (a
+      small appliance is never `:childrens-product?`, yet still HARD-
+      holds here). `test/housewaretrade/governor_contract_test.clj`'s
+      `recall-resolution-allows-dispatch-on-the-same-sku` further proves
+      this SAME order, once its `:recall-status` is patched to
+      `:resolved` via `:order/intake`, dispatches cleanly afterward --
+      the post-hoc, re-checked nature of this flag (see
+      `housewaretrade.governor` and `housewaretrade.store` namespace
+      docstrings)."
+  []
+  {:household-orders
+   (into {}
+         (for [o [(base-order {:id "ho-1" :order-id "HO-2026-0001"})
+                  (base-order {:id "ho-2" :order-id "HO-2026-0002"
+                               :product-category :small-appliance
+                               :sku "HG-SKU-10002"
+                               :counterparty "Atlantis Household Imports Ltd"
+                               :jurisdiction "ATL"})
+                  (base-order {:id "ho-3" :order-id "HO-2026-0003"
+                               :product-category :furniture
+                               :sku "HG-SKU-10003"
+                               :counterparty "Cedar Housewares Distributors"
+                               :credit-cleared? false})
+                  (base-order {:id "ho-4" :order-id "HO-2026-0004"
+                               :product-category :small-appliance
+                               :sku "HG-SKU-10004"
+                               :counterparty "Delta Appliance Wholesalers BV"
+                               :contract-terms nil})
+                  (base-order {:id "ho-5" :order-id "HO-2026-0005"
+                               :product-category :cookware
+                               :sku "HG-SKU-10005"
+                               :counterparty "Eagle Home Goods SA"
+                               :sanctions-screened? false})
+                  (base-order {:id "ho-6" :order-id "HO-2026-0006"
+                               :product-category :toy
+                               :sku "HG-SKU-10006"
+                               :counterparty "Fenwick Toy & Nursery Wholesalers Inc"
+                               :childrens-product? true
+                               :lead-phthalate-tested? true
+                               :childrens-product-certificate-on-file? true})
+                  (base-order {:id "ho-7" :order-id "HO-2026-0007"
+                               :product-category :toy
+                               :sku "HG-SKU-10007"
+                               :counterparty "Granger Children's Products KK"
+                               :childrens-product? true
+                               :lead-phthalate-tested? true
+                               :childrens-product-certificate-on-file? false})
+                  (base-order {:id "ho-8" :order-id "HO-2026-0008"
+                               :product-category :small-appliance
+                               :sku "HG-SKU-10008"
+                               :counterparty "Harrow Appliance Traders Co"
+                               :recall-status :open})]]
+           [(:id o) o]))})
+
+;; ----------------------------- shared commit logic -----------------------------
+
+(defn- dispatch-order!
+  "Backend-agnostic `:order/mark-dispatched` -- looks up the household-
+  order via the protocol and drafts the household-goods-dispatch record,
+  and returns {:result .. :household-order-patch ..} for the caller to
+  persist."
+  [s household-order-id]
+  (let [ho (household-order s household-order-id)
+        seq-n (next-dispatch-sequence s (:jurisdiction ho))
+        result (registry/register-dispatch-record household-order-id (:jurisdiction ho) seq-n)]
+    {:result result
+     :household-order-patch {:dispatched? true
+                             :dispatch-number (get result "dispatch_number")}}))
+
+(defn- invoice-order!
+  "Backend-agnostic `:order/mark-invoiced` -- looks up the household-
+  order via the protocol and drafts the household-goods-invoice record,
+  and returns {:result .. :household-order-patch ..} for the caller to
+  persist."
+  [s household-order-id]
+  (let [ho (household-order s household-order-id)
+        seq-n (next-invoice-sequence s (:jurisdiction ho))
+        result (registry/register-invoice-record household-order-id (:jurisdiction ho) seq-n)]
+    {:result result
+     :household-order-patch {:invoiced? true
+                             :invoice-number (get result "invoice_number")}}))
+
+;; ----------------------------- MemStore (default) -----------------------------
+
+(defrecord MemStore [a]
+  Store
+  (household-order [_ id] (get-in @a [:household-orders id]))
+  (all-household-orders [_] (sort-by :id (vals (:household-orders @a))))
+  (assessment-of [_ household-order-id] (get-in @a [:assessments household-order-id]))
+  (ledger [_] (:ledger @a))
+  (dispatch-history [_] (:dispatches @a))
+  (invoice-history [_] (:invoices @a))
+  (next-dispatch-sequence [_ jurisdiction] (get-in @a [:dispatch-sequences jurisdiction] 0))
+  (next-invoice-sequence [_ jurisdiction] (get-in @a [:invoice-sequences jurisdiction] 0))
+  (household-order-already-dispatched? [_ household-order-id] (boolean (get-in @a [:household-orders household-order-id :dispatched?])))
+  (household-order-already-invoiced? [_ household-order-id] (boolean (get-in @a [:household-orders household-order-id :invoiced?])))
+  (commit-record! [s {:keys [effect path value payload]}]
+    (case effect
+      :order/upsert
+      (swap! a update-in [:household-orders (:id value)] merge value)
+
+      :safety-assessment/set
+      (swap! a assoc-in [:assessments (first path)] payload)
+
+      :order/mark-dispatched
+      (let [household-order-id (first path)
+            {:keys [result household-order-patch]} (dispatch-order! s household-order-id)
+            jurisdiction (:jurisdiction (household-order s household-order-id))]
+        (swap! a (fn [state]
+                   (-> state
+                       (update-in [:dispatch-sequences jurisdiction] (fnil inc 0))
+                       (update-in [:household-orders household-order-id] merge household-order-patch)
+                       (update :dispatches registry/append result))))
+        result)
+
+      :order/mark-invoiced
+      (let [household-order-id (first path)
+            {:keys [result household-order-patch]} (invoice-order! s household-order-id)
+            jurisdiction (:jurisdiction (household-order s household-order-id))]
+        (swap! a (fn [state]
+                   (-> state
+                       (update-in [:invoice-sequences jurisdiction] (fnil inc 0))
+                       (update-in [:household-orders household-order-id] merge household-order-patch)
+                       (update :invoices registry/append result))))
+        result)
+      nil)
+    s)
+  (append-ledger! [_ fact] (swap! a update :ledger conj fact) fact)
+  (with-household-orders [s household-orders] (when (seq household-orders) (swap! a assoc :household-orders household-orders)) s))
+
+(defn seed-db
+  "A MemStore seeded with the demo household-order set. The
+  deterministic default."
+  []
+  (->MemStore (atom (assoc (demo-data)
+                           :assessments {}
+                           :ledger [] :dispatch-sequences {} :dispatches []
+                           :invoice-sequences {} :invoices []))))
+
+;; ----------------------------- DatomicStore (langchain.db) -----------------------------
+
+(def ^:private schema
+  "DataScript/Datomic-style schema: only constraint attrs are declared.
+  Map/compound values (assessment payloads, ledger facts, dispatch/
+  invoice records) are stored as EDN strings so `langchain.db` doesn't
+  expand them into sub-entities -- the same convention every sibling
+  actor's store uses."
+  {:household-order/id                   {:db/unique :db.unique/identity}
+   :assessment/household-order-id        {:db/unique :db.unique/identity}
+   :ledger/seq                           {:db/unique :db.unique/identity}
+   :dispatch/seq                         {:db/unique :db.unique/identity}
+   :invoice/seq                          {:db/unique :db.unique/identity}
+   :dispatch-sequence/jurisdiction       {:db/unique :db.unique/identity}
+   :invoice-sequence/jurisdiction        {:db/unique :db.unique/identity}})
+
+(defn- enc [v] (pr-str v))
+(defn- dec* [s] (when s (edn/read-string s)))
+
+;; Every household-order field is stored as its own Datomic attr so a
+;; governor pull reads the exact ground truth (no blob decode). Boolean
+;; fields are coerced on read so a missing attr reads back as false
+;; (parity with MemStore). `:recall-status` is NOT boolean-coerced (it is
+;; an enum keyword, defaulting to nil rather than false when absent --
+;; callers treat nil the same as `:none`, but `:with-household-orders`
+;; always writes the field explicitly so this default path is only hit
+;; for a never-written entity). [field-key tx-attr boolean?]
+(def ^:private household-order-fields
+  [[:id :household-order/id false]
+   [:order-id :household-order/order-id false]
+   [:product-category :household-order/product-category false]
+   [:sku :household-order/sku false]
+   [:counterparty :household-order/counterparty false]
+   [:price :household-order/price false]
+   [:contract-terms :household-order/contract-terms false]
+   [:credit-cleared? :household-order/credit-cleared? true]
+   [:sanctions-screened? :household-order/sanctions-screened? true]
+   [:childrens-product? :household-order/childrens-product? true]
+   [:lead-phthalate-tested? :household-order/lead-phthalate-tested? true]
+   [:childrens-product-certificate-on-file? :household-order/childrens-product-certificate-on-file? true]
+   [:recall-status :household-order/recall-status false]
+   [:dispatched? :household-order/dispatched? true]
+   [:invoiced? :household-order/invoiced? true]
+   [:jurisdiction :household-order/jurisdiction false]
+   [:status :household-order/status false]
+   [:dispatch-number :household-order/dispatch-number false]
+   [:invoice-number :household-order/invoice-number false]])
+
+(defn- household-order->tx [ho]
+  (reduce (fn [tx [k attr _bool?]]
+            (let [v (get ho k)]
+              (cond-> tx (some? v) (assoc attr v))))
+          {:household-order/id (:id ho)}
+          household-order-fields))
+
+(def ^:private household-order-pull (mapv second household-order-fields))
+
+(defn- pull->household-order [m]
+  (when (:household-order/id m)
+    (reduce (fn [ho [k attr bool?]]
+              (let [v (get m attr)]
+                (cond
+                  bool?        (assoc ho k (boolean v))
+                  (some? v)    (assoc ho k v)
+                  :else        ho)))
+            {:id (:household-order/id m)}
+            household-order-fields)))
+
+(defrecord DatomicStore [conn]
+  Store
+  (household-order [_ id]
+    (pull->household-order (d/pull (d/db conn) household-order-pull [:household-order/id id])))
+  (all-household-orders [_]
+    (->> (d/q '[:find [?id ...] :where [?e :household-order/id ?id]] (d/db conn))
+         (map #(pull->household-order (d/pull (d/db conn) household-order-pull [:household-order/id %])))
+         (sort-by :id)))
+  (assessment-of [_ household-order-id]
+    (dec* (d/q '[:find ?p . :in $ ?hoid
+                :where [?a :assessment/household-order-id ?hoid] [?a :assessment/payload ?p]]
+              (d/db conn) household-order-id)))
+  (ledger [_]
+    (->> (d/q '[:find ?s ?f :where [?e :ledger/seq ?s] [?e :ledger/fact ?f]] (d/db conn))
+         (sort-by first)
+         (mapv (comp dec* second))))
+  (dispatch-history [_]
+    (->> (d/q '[:find ?s ?r :where [?e :dispatch/seq ?s] [?e :dispatch/record ?r]] (d/db conn))
+         (sort-by first)
+         (mapv (comp dec* second))))
+  (invoice-history [_]
+    (->> (d/q '[:find ?s ?r :where [?e :invoice/seq ?s] [?e :invoice/record ?r]] (d/db conn))
+         (sort-by first)
+         (mapv (comp dec* second))))
+  (next-dispatch-sequence [_ jurisdiction]
+    (or (d/q '[:find ?n . :in $ ?j
+              :where [?e :dispatch-sequence/jurisdiction ?j] [?e :dispatch-sequence/next ?n]]
+            (d/db conn) jurisdiction)
+        0))
+  (next-invoice-sequence [_ jurisdiction]
+    (or (d/q '[:find ?n . :in $ ?j
+              :where [?e :invoice-sequence/jurisdiction ?j] [?e :invoice-sequence/next ?n]]
+            (d/db conn) jurisdiction)
+        0))
+  (household-order-already-dispatched? [s household-order-id]
+    (boolean (:dispatched? (household-order s household-order-id))))
+  (household-order-already-invoiced? [s household-order-id]
+    (boolean (:invoiced? (household-order s household-order-id))))
+  (commit-record! [s {:keys [effect path value payload]}]
+    (case effect
+      :order/upsert
+      (d/transact! conn [(household-order->tx value)])
+
+      :safety-assessment/set
+      (d/transact! conn [{:assessment/household-order-id (first path) :assessment/payload (enc payload)}])
+
+      :order/mark-dispatched
+      (let [household-order-id (first path)
+            {:keys [result household-order-patch]} (dispatch-order! s household-order-id)
+            jurisdiction (:jurisdiction (household-order s household-order-id))
+            next-n (inc (next-dispatch-sequence s jurisdiction))]
+        (d/transact! conn
+                     [(household-order->tx (assoc household-order-patch :id household-order-id))
+                      {:dispatch-sequence/jurisdiction jurisdiction :dispatch-sequence/next next-n}
+                      {:dispatch/seq (count (dispatch-history s)) :dispatch/record (enc (get result "record"))}])
+        result)
+
+      :order/mark-invoiced
+      (let [household-order-id (first path)
+            {:keys [result household-order-patch]} (invoice-order! s household-order-id)
+            jurisdiction (:jurisdiction (household-order s household-order-id))
+            next-n (inc (next-invoice-sequence s jurisdiction))]
+        (d/transact! conn
+                     [(household-order->tx (assoc household-order-patch :id household-order-id))
+                      {:invoice-sequence/jurisdiction jurisdiction :invoice-sequence/next next-n}
+                      {:invoice/seq (count (invoice-history s)) :invoice/record (enc (get result "record"))}])
+        result)
+      nil)
+    s)
+  (append-ledger! [s fact]
+    (d/transact! conn [{:ledger/seq (count (ledger s)) :ledger/fact (enc fact)}])
+    fact)
+  (with-household-orders [s household-orders]
+    (when (seq household-orders) (d/transact! conn (mapv household-order->tx (vals household-orders)))) s))
+
+(defn datomic-store
+  "A DatomicStore (langchain.db backend) seeded from `data`
+  ({:household-orders ..}); empty when omitted."
+  ([] (datomic-store {}))
+  ([{:keys [household-orders]}]
+   (let [s (->DatomicStore (d/create-conn schema))]
+     (with-household-orders s household-orders))))
+
+(defn datomic-seed-db
+  "A DatomicStore seeded with the demo household-order set -- the
+  Datomic-backed analog of `seed-db`, used to prove protocol parity."
+  []
+  (datomic-store (demo-data)))

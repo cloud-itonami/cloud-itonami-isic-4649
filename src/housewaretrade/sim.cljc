@@ -1,0 +1,152 @@
+(ns housewaretrade.sim
+  "Demo driver -- `clojure -M:dev:run`. Walks a clean general household
+  good through intake -> safety verification -> physical dispatch
+  (escalate/approve/commit) -> invoice settlement (escalate/approve/
+  commit), then shows HARD-hold scenarios: a jurisdiction with no
+  spec-basis, a counterparty whose credit has not been cleared, an
+  order with no contract-terms on file, a counterparty that has not
+  passed sanctions screening, a children's product missing its
+  Children's Product Certificate, a double dispatch, and a double
+  invoice -- THEN the two proofs that make this vertical's own domain
+  logic honest rather than a blanket rule:
+
+    1. `:childrens-product?` type-gating -- a fully-certified children's
+       product (`ho-6`) dispatches CLEANLY end-to-end (verify -> dispatch
+       -> invoice), proving the Children's Product Certificate check is
+       satisfiable, not merely a trap; `ho-1` (a general household good)
+       already proved the check is a true NO-OP for non-children's
+       goods earlier in this same run.
+    2. the active-recall lifecycle -- `ho-8` (an active, unresolved
+       recall) HARD-holds at dispatch, and then, on the SAME order/SKU,
+       once a compliance officer records the recall's resolution via a
+       plain `:order/intake` patch (`:recall-status :resolved` -- no new
+       op needed), the SAME order dispatches CLEANLY -- the exact
+       open-then-resolved proof this vertical's own post-hoc regulatory
+       mechanic (CPSA §15(b)) calls for. See `housewaretrade.governor`
+       namespace docstring.
+
+  Like every sibling actor's domain checks, this actor's checks
+  (`credit-uncleared`, `contract-missing`, `childrens-product-
+  certificate-missing`, `active-recall-unresolved`,
+  `counterparty-sanctions-flag-unresolved`) are evaluated directly at
+  `:delivery/dispatch` (recall and sanctions also at `:invoice/settle`)
+  rather than via a separate screening op -- a real dispatch decision
+  validates counterparty credit, contract-on-file, children's-product
+  certification, recall status and sanctions screening at the point of
+  the act itself, not as a discrete pre-screening ceremony. Each check
+  is still exercised directly and independently below, one order per
+  HARD-hold scenario, following the SAME 'exercise the failure mode
+  directly, never only via a happy-path actuation' discipline every
+  sibling since `parksafety`'s ADR-2607071922 Decision 5 establishes."
+  (:require [langgraph.graph :as g]
+            [housewaretrade.store :as store]
+            [housewaretrade.operation :as op]))
+
+(def operator {:actor-id "op-1" :actor-role :trading-supervisor :phase 3})
+
+(defn- exec-op [actor tid request context]
+  (g/run* actor {:request request :context context} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "op-1"}} {:thread-id tid :resume? true}))
+
+(defn -main [& _]
+  (let [db (store/seed-db)
+        actor (op/build db)]
+    (println "== order/intake ho-1 (USA cookware, general household good, clean) ==")
+    (println (exec-op actor "t1" {:op :order/intake :subject "ho-1"
+                                  :patch {:id "ho-1" :counterparty "Akita Household Goods Trading Co"}} operator))
+
+    (println "== safety/verify ho-1 (escalates -- human approves) ==")
+    (println (exec-op actor "t2" {:op :safety/verify :subject "ho-1"} operator))
+    (println (approve! actor "t2"))
+
+    (println "== delivery/dispatch ho-1 (always escalates -- :delivery/dispatch; general good, no CPC required) ==")
+    (let [r (exec-op actor "t3" {:op :delivery/dispatch :subject "ho-1"} operator)]
+      (println r)
+      (println "-- human trading supervisor approves --")
+      (println (approve! actor "t3")))
+
+    (println "== invoice/settle ho-1 (always escalates -- :invoice/settle) ==")
+    (let [r (exec-op actor "t4" {:op :invoice/settle :subject "ho-1"} operator)]
+      (println r)
+      (println "-- human trading supervisor approves --")
+      (println (approve! actor "t4")))
+
+    (println "== safety/verify ho-2 (no spec-basis -> HARD hold) ==")
+    (println (exec-op actor "t5" {:op :safety/verify :subject "ho-2"} operator))
+
+    (println "== safety/verify ho-3 (escalates -- human approves; sets up the credit-uncleared test) ==")
+    (println (exec-op actor "t6" {:op :safety/verify :subject "ho-3"} operator))
+    (println (approve! actor "t6"))
+
+    (println "== delivery/dispatch ho-3 (credit not cleared -> HARD hold) ==")
+    (println (exec-op actor "t7" {:op :delivery/dispatch :subject "ho-3"} operator))
+
+    (println "== safety/verify ho-4 (escalates -- human approves; sets up the contract-missing test) ==")
+    (println (exec-op actor "t8" {:op :safety/verify :subject "ho-4"} operator))
+    (println (approve! actor "t8"))
+
+    (println "== delivery/dispatch ho-4 (no contract-terms on file -> HARD hold) ==")
+    (println (exec-op actor "t9" {:op :delivery/dispatch :subject "ho-4"} operator))
+
+    (println "== safety/verify ho-5 (escalates -- human approves; sets up the sanctions test) ==")
+    (println (exec-op actor "t10" {:op :safety/verify :subject "ho-5"} operator))
+    (println (approve! actor "t10"))
+
+    (println "== delivery/dispatch ho-5 (sanctions screening not passed -> HARD hold) ==")
+    (println (exec-op actor "t11" {:op :delivery/dispatch :subject "ho-5"} operator))
+
+    (println "== safety/verify ho-6 (children's product, toy, CPC on file -- escalates -- human approves) ==")
+    (println (exec-op actor "t12" {:op :safety/verify :subject "ho-6"} operator))
+    (println (approve! actor "t12"))
+
+    (println "== delivery/dispatch ho-6 (children's product WITH a valid CPC -> dispatches cleanly, escalates on actuation only) ==")
+    (let [r (exec-op actor "t13" {:op :delivery/dispatch :subject "ho-6"} operator)]
+      (println r)
+      (println "-- human trading supervisor approves (children's-product-certificate check is satisfiable, not a trap) --")
+      (println (approve! actor "t13")))
+
+    (println "== invoice/settle ho-6 (always escalates -- human approves) ==")
+    (let [r (exec-op actor "t14" {:op :invoice/settle :subject "ho-6"} operator)]
+      (println r)
+      (println (approve! actor "t14")))
+
+    (println "== safety/verify ho-7 (children's product, toy, lab-tested but NO CPC on file -- escalates -- human approves) ==")
+    (println (exec-op actor "t15" {:op :safety/verify :subject "ho-7"} operator))
+    (println (approve! actor "t15"))
+
+    (println "== delivery/dispatch ho-7 (children's product, CPC not on file -> HARD hold) ==")
+    (println (exec-op actor "t16" {:op :delivery/dispatch :subject "ho-7"} operator))
+
+    (println "== safety/verify ho-8 (small appliance, active unresolved recall -- escalates -- human approves) ==")
+    (println (exec-op actor "t17" {:op :safety/verify :subject "ho-8"} operator))
+    (println (approve! actor "t17"))
+
+    (println "== delivery/dispatch ho-8 (active recall OPEN -> HARD hold) ==")
+    (println (exec-op actor "t18" {:op :delivery/dispatch :subject "ho-8"} operator))
+
+    (println "== order/intake ho-8 (compliance officer records recall RESOLUTION -- plain patch, no new op) ==")
+    (println (exec-op actor "t19" {:op :order/intake :subject "ho-8"
+                                   :patch {:id "ho-8" :recall-status :resolved}} operator))
+
+    (println "== delivery/dispatch ho-8 AGAIN (SAME order/SKU, recall now :resolved -> dispatches cleanly) ==")
+    (let [r (exec-op actor "t20" {:op :delivery/dispatch :subject "ho-8"} operator)]
+      (println r)
+      (println "-- human trading supervisor approves (recall lifecycle proof: open -> resolved -> dispatchable) --")
+      (println (approve! actor "t20")))
+
+    (println "== delivery/dispatch ho-1 AGAIN (double-dispatch -> HARD hold) ==")
+    (println (exec-op actor "t21" {:op :delivery/dispatch :subject "ho-1"} operator))
+
+    (println "== invoice/settle ho-1 AGAIN (double-invoice -> HARD hold) ==")
+    (println (exec-op actor "t22" {:op :invoice/settle :subject "ho-1"} operator))
+
+    (println "== audit ledger ==")
+    (doseq [f (store/ledger db)] (println f))
+
+    (println "== draft household-goods-dispatch records ==")
+    (doseq [r (store/dispatch-history db)] (println r))
+
+    (println "== draft household-goods-invoice records ==")
+    (doseq [r (store/invoice-history db)] (println r))))
