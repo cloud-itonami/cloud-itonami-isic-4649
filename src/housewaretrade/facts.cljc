@@ -99,6 +99,58 @@
     sanctions programs) apply as in every sibling's own counterparty-
     diligence checklist.
 
+  - MEX (the third seeded jurisdiction, added 2026-07): NOM-003-SCFI-2000
+    (Productos eléctricos - Especificaciones de seguridad / Electrical
+    products - Safety specifications), Mexico's mandatory
+    household-appliance/electrical-product safety standard --
+    administered by the Secretaría de Economía (SE, normalización)
+    with PROFECO (Procuraduría Federal del Consumidor) as the
+    verifying/enforcing consumer-protection authority, structurally the
+    closest Mexican analog to the USA's CPSC certificate regime and
+    Japan's PSC-mark system above -- and NOM-050-SCFI-2004
+    (Información comercial - Etiquetado general de productos / General
+    commercial-information labeling of products), Mexico's general
+    product-labeling standard (product identity, net content,
+    manufacturer/importer identification, país de origen), also
+    PROFECO-administered under the Ley Federal de Protección al
+    Consumidor, which superseded NOM-050-SCFI-1994 (publicada en el
+    D.O.F. 24 de enero de 1996) when it was itself published en el D.O.F.
+    01 de junio de 2004. BOTH NOM numbers and their D.O.F. publication
+    dates were directly verified this build from PROFECO's OWN official
+    \"Marco Jurídico / Normas Oficiales Mexicanas\" pages -- but only via
+    the Internet Archive Wayback Machine (the `noms.asp` hub page
+    archived 2007-02-07; the safety-specific `noms_seguri.asp` sub-page
+    archived 2012-02-25; the labeling-specific `noms_infcom.asp`
+    sub-page archived 2011-12-21), because PROFECO's live domain
+    (profeco.gob.mx) now 302-redirects every one of these legacy static
+    pages into the modern gob.mx/profeco single-page-app shell, which
+    serves no crawlable NOM-listing content at all in this build's
+    fetch, and dof.gob.mx (the Diario Oficial de la Federación itself,
+    the ultimate primary source) was UNREACHABLE from this build's
+    network this session (DNS SERVFAIL, then a raw TCP connection
+    timeout even against an explicit Google-DNS-resolved IP -- not a
+    bot-detection challenge; no HTTP response of any kind was ever
+    received to bypass). This build's confidence that NOM-003-SCFI-2000
+    remains the CURRENT version (rather than having since been
+    superseded by a later revision) is therefore MODERATE, not high --
+    the most recent PROFECO snapshot this build could actually read is
+    from 2012, and no live crawlable source could be reached this
+    session to confirm no newer revision has issued since; flagged here
+    for independent re-verification before this catalog entry is relied
+    on operationally, the same discipline the JPN entry above already
+    applies to its own reporting-deadline citation. This build
+    deliberately does NOT cite a separate import-certification
+    requirement (e.g. a Documento-de-Cumplimiento-de-Normas-style
+    customs gate via the Secretaría de Economía / Ventanilla Única de
+    Comercio Exterior) for household goods entering Mexico:
+    normas-aduanas.gob.mx returned a genuine 503 Service Unavailable
+    (plain nginx maintenance-page text, not a bot-detection challenge)
+    on every path tried, and its one reachable page is an authenticated
+    customs-broker login portal even when the service is up -- so this
+    build has NOT independently verified that import-side mechanic and
+    will not guess at it. OFAC-equivalent sanctions programs apply as in
+    every sibling's own counterparty-diligence checklist.
+
   NOT seeded in this R0 (named here for honesty, not fabricated as a
   catalog entry): the EU's General Product Safety Regulation (EU)
   2023/988, which replaced the 2001/95/EC General Product Safety
@@ -147,6 +199,13 @@
           :owner-authority "経済産業省 (METI) / 消費者庁 (Consumer Affairs Agency, CAA)"
           :legal-basis "消費生活用製品安全法 (Consumer Product Safety Act, Act No. 31 of 1973) -- PSCマーク制度(特定製品・特別特定製品の適合性表示); 重大製品事故報告制度(事業者が重大製品事故を知った時からの報告義務、METI); OFAC等同等制裁プログラム"
           :provenance "https://www.meti.go.jp/policy/consumer/seian/shouan/index.html"
+          :required-evidence ["credit-clearance record"
+                              "contract/PO"
+                              "sanctions-screening (OFAC/equivalent) record"]}
+   "MEX" {:name "MEX"
+          :owner-authority "Secretaría de Economía (SE, normalización) / Procuraduría Federal del Consumidor (PROFECO, verificación de normas y protección al consumidor)"
+          :legal-basis "NOM-003-SCFI-2000, Productos eléctricos - Especificaciones de seguridad (mandatory electrical-household-product safety standard; publicada en el D.O.F. 10 de enero de 2001) -- confidence this is still the CURRENT revision is MODERATE, not high, see namespace docstring; NOM-050-SCFI-2004, Información comercial - Etiquetado general de productos (general commercial-information product-labeling standard -- product identity, net content, manufacturer/importer identification, país de origen; publicada en el D.O.F. 01 de junio de 2004, supersedes NOM-050-SCFI-1994 publicada 24 de enero de 1996), both PROFECO-administered under the Ley Federal de Protección al Consumidor; OFAC-equivalent sanctions programs apply as in every sibling's own counterparty-diligence checklist. Does NOT cite a separate import-certification/customs-verification requirement -- not independently verified this build, see namespace docstring gap note."
+          :provenance "https://web.archive.org/web/20070207021410/http://www.profeco.gob.mx:80/juridico/noms.asp"
           :required-evidence ["credit-clearance record"
                               "contract/PO"
                               "sanctions-screening (OFAC/equivalent) record"]}})
