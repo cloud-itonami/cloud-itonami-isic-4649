@@ -47,12 +47,101 @@
   phase-disabled artifact."
   {:actor-id "op-1" :actor-role :trading-supervisor :phase 3})
 
+(def ^:private ^:dynamic *audit*
+  "Collector for the run's audit channel. `langgraph.graph/run*` returns
+  `{:state :events :status :frontier}` and the actor's `:audit` channel
+  lives on `:state`; only the `:commit`/`:hold` nodes copy anything from
+  there into the store's ledger, so the `:approval-granted` facts exist
+  ONLY here. The console's approver-attribution section is a join
+  between these facts and what the SSoT actually holds -- see
+  `approver-on-record`."
+  nil)
+
+(def ^:private ^:dynamic *db*
+  "The store `run-demo!` is driving, so `approve!` can measure what a
+  single approval actually wrote to it."
+  nil)
+
+(defn- collect! [r]
+  (when *audit* (swap! *audit* into (:audit (:state r))))
+  r)
+
 (defn- exec! [actor tid request]
-  (g/run* actor {:request request :context operator} {:thread-id tid}))
+  (collect! (g/run* actor {:request request :context operator} {:thread-id tid})))
+
+;; --- did the approver reach the SSoT? (measured, never asserted) -----
+;;
+;; A known, real scaffold defect in this actor, rendered honestly rather
+;; than papered over: `housewaretrade.operation`'s `:request-approval`
+;; node attaches the approver to the record under `:payload`
+;; (`(assoc (:value proposal) :approved-by (:by approval))`), but
+;; `housewaretrade.store/commit-record!` only READS `:payload` for the
+;; `:safety-assessment/set` effect. `:order/upsert` writes `:value`
+;; (which carries no approver) and `:order/mark-dispatched` /
+;; `:order/mark-invoiced` derive their patch from the store itself and
+;; read neither.
+;;
+;; Rather than encode that reasoning as a claim on the page, `approve!`
+;; MEASURES it: it snapshots the whole store before and after each
+;; approval, and searches only the artifacts that approval actually
+;; changed. That distinction matters -- a `:delivery/dispatch` approval
+;; for `ho-1` runs against a store whose `ho-1` assessment ALREADY
+;; carries `:approved-by "op-1"` (put there by the earlier
+;; `:safety/verify` approval), so a naive point-in-time probe would
+;; credit the dispatch with an attribution it never made.
+
+(def ^:private approver-key-re #"(?i)approv")
+
+(defn- approver-in
+  "The first approval-ish [key value] pair anywhere inside `v`, or nil.
+  Handles both keyword-keyed store maps and the string-keyed registry
+  drafts; descends in sorted key order so the answer never depends on
+  hash-map iteration order."
+  [v]
+  (cond
+    (map? v) (let [sorted (sort-by (comp str key) v)]
+               (or (first (filter (fn [[k _]] (re-find approver-key-re (str k))) sorted))
+                   (some (comp approver-in val) sorted)))
+    (sequential? v) (some approver-in v)
+    :else nil))
+
+(defn- store-snapshot []
+  (let [orders (store/all-household-orders *db*)]
+    {:orders (into {} (map (juxt :id identity) orders))
+     :assessments (into {} (map (juxt :id #(store/assessment-of *db* (:id %))) orders))
+     :drafts (vec (concat (store/dispatch-history *db*) (store/invoice-history *db*)))}))
+
+(defn- approver-landed
+  "Where -- if anywhere -- an approver appears in the SSoT data that
+  changed between `before` and `after`. `{:where .. :key .. :value ..}`
+  or nil."
+  [before after]
+  (let [changed (concat
+                 (for [[id m] (sort-by key (:assessments after))
+                       :when (and (some? m) (not= m (get-in before [:assessments id])))]
+                   [(str "safety assessment for " id) m])
+                 (for [[id m] (sort-by key (:orders after))
+                       :when (not= m (get-in before [:orders id]))]
+                   [(str "household-order record " id) m])
+                 (for [r (drop (count (:drafts before)) (:drafts after))]
+                   [(str "registry draft " (get r "record_id")) r]))]
+    (some (fn [[where m]]
+            (when-let [[k v] (approver-in m)]
+              {:where where :key (str k) :value v}))
+          changed)))
 
 (defn- approve! [actor tid]
-  (g/run* actor {:approval {:status :approved :by (:actor-id operator)}}
-          {:thread-id tid :resume? true}))
+  (let [before (store-snapshot)
+        r (g/run* actor {:approval {:status :approved :by (:actor-id operator)}}
+                  {:thread-id tid :resume? true})
+        landed (approver-landed before (store-snapshot))]
+    (when *audit*
+      (swap! *audit* into
+             (mapv (fn [f]
+                     (cond-> f
+                       (= :approval-granted (:t f)) (assoc :approver-landed landed)))
+                   (:audit (:state r)))))
+    r))
 
 (defn- verify+approve!
   "`:safety/verify` escalates at every phase (it is a write op that is
@@ -103,11 +192,13 @@
       proof this vertical's own regulatory mechanic (CPSA §15(b)) calls
       for.
 
-  Returns the resulting store. Every value the page renders is read
-  back out of this store."
+  Returns `{:db store :audit [fact ...]}`. Every value the page renders
+  is read back out of that store, except the `:approval-granted` facts,
+  which only ever exist on the run's audit channel (see `*audit*`)."
   []
-  (let [db (store/seed-db)
-        actor (op/build db)]
+  (let [db (store/seed-db)]
+   (binding [*audit* (atom []) *db* db]
+   (let [actor (op/build db)]
 
     ;; --- ho-1: full clean lifecycle -----------------------------------
     ;; The intake patch re-states the order's OWN counterparty read back
@@ -153,7 +244,7 @@
     ;; --- ho-1 again: double-actuation guards ----------------------------
     (exec! actor "ho-1-dispatch-again" {:op :delivery/dispatch :subject "ho-1"})
     (exec! actor "ho-1-settle-again" {:op :invoice/settle :subject "ho-1"})
-    db))
+    {:db db :audit @*audit*}))))
 
 ;; ----------------------------- rendering -----------------------------
 
@@ -253,6 +344,18 @@
           (esc (str/join ", " subjects))
           (esc detail)))
 
+;; --- approver attribution --------------------------------------------
+
+(defn- approval-row [{:keys [op subject by approver-landed]}]
+  (format "        <tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+          (esc (str op)) (esc subject) (esc by)
+          (if approver-landed
+            (format "<span class=\"ok\">yes</span> &middot; %s, <code>%s</code> = <code>%s</code>"
+                    (esc (:where approver-landed))
+                    (esc (:key approver-landed))
+                    (esc (:value approver-landed)))
+            "<span class=\"warn\">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row")))
+
 ;; --- jurisdictions ---------------------------------------------------
 
 (defn- jurisdiction-row [iso3]
@@ -289,10 +392,11 @@
             "<span class=\"warn\">mutable</span>")))
 
 (defn render
-  "Renders the whole operator-console document from a store `db` that
-  has already been driven by `run-demo!` (or any other real scenario)."
-  [db]
+  "Renders the whole operator-console document from the `{:db :audit}`
+  result of `run-demo!` (or any other real scenario)."
+  [{:keys [db audit]}]
   (let [ledger (vec (store/ledger db))
+        approvals (filter #(= :approval-granted (:t %)) audit)
         orders (store/all-household-orders db)
         hs (holds ledger)
         jurisdictions (sort (distinct (map :jurisdiction orders)))
@@ -341,6 +445,17 @@
      "  </section>\n"
 
      "  <section class=\"card\">\n"
+     "    <h2>Approver attribution (" (count approvals) " approvals granted this run)</h2>\n"
+     "    <p class=\"muted\">Every <code>:approval-granted</code> fact this run produced. The last column is <em>measured</em>, not asserted: the generator snapshots the whole store immediately before and after each approval and searches only the artifacts <em>that approval itself changed</em> for an approver-shaped key. (A point-in-time probe would be wrong here — by the time <code>ho-1</code>'s dispatch is approved, its safety assessment already carries <code>:approved-by</code> from the earlier <code>:safety/verify</code> approval, and would falsely credit the dispatch.) <strong>Known scaffold defect, stated plainly:</strong> <code>housewaretrade.operation</code>'s <code>:request-approval</code> node attaches the approver to the record under <code>:payload</code>, but <code>housewaretrade.store/commit-record!</code> only reads <code>:payload</code> for the <code>:safety-assessment/set</code> effect — <code>:order/upsert</code> writes <code>:value</code> (no approver) and <code>:order/mark-dispatched</code>/<code>:order/mark-invoiced</code> derive their patch from the store and read neither. So a safety verification carries its approver into the SSoT and a dispatch or an invoice settlement does not. This console will not print an approver the store does not hold; for those rows the attribution exists only as the audit fact itself, which is <em>not</em> in the append-only ledger below.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Op</th><th>Order</th><th>Approved by (resume payload)</th><th>Did this approval put the approver on the SSoT?</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map approval-row approvals)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
      "    <h2>Jurisdiction spec-basis</h2>\n"
      "    <p class=\"muted\">The jurisdictions the seeded orders actually reference, looked up in <code>housewaretrade.facts/catalog</code>. A jurisdiction with no entry has no spec-basis at all — the advisor must not invent one, and the governor holds if it tries.</p>\n"
      "    <table>\n"
@@ -378,14 +493,15 @@
 
 (defn -main [& args]
   (let [out (or (first args) "docs/samples/operator-console.html")
-        db (run-demo!)
+        {:keys [db audit] :as run} (run-demo!)
         ledger (vec (store/ledger db))
         hs (holds ledger)]
     (when (empty? hs)
       (throw (ex-info "no :governor-hold fact on the ledger — refusing to write a console that shows no real hold"
                       {:ledger-facts (count ledger)})))
-    (spit out (render db))
+    (spit out (render run))
     (println "wrote" out "(" (count ledger) "ledger facts,"
              (count hs) "HARD holds,"
+             (count (filter #(= :approval-granted (:t %)) audit)) "approvals,"
              (count (store/dispatch-history db)) "dispatch drafts,"
              (count (store/invoice-history db)) "invoice drafts )")))

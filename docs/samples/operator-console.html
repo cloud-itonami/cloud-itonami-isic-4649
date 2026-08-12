@@ -2515,6 +2515,27 @@ img,svg { max-width: 100%; height: auto; }</style></head><body>
     </table>
   </section>
   <section class="card">
+    <h2>Approver attribution (12 approvals granted this run)</h2>
+    <p class="muted">Every <code>:approval-granted</code> fact this run produced. The last column is <em>measured</em>, not asserted: the generator snapshots the whole store immediately before and after each approval and searches only the artifacts <em>that approval itself changed</em> for an approver-shaped key. (A point-in-time probe would be wrong here — by the time <code>ho-1</code>'s dispatch is approved, its safety assessment already carries <code>:approved-by</code> from the earlier <code>:safety/verify</code> approval, and would falsely credit the dispatch.) <strong>Known scaffold defect, stated plainly:</strong> <code>housewaretrade.operation</code>'s <code>:request-approval</code> node attaches the approver to the record under <code>:payload</code>, but <code>housewaretrade.store/commit-record!</code> only reads <code>:payload</code> for the <code>:safety-assessment/set</code> effect — <code>:order/upsert</code> writes <code>:value</code> (no approver) and <code>:order/mark-dispatched</code>/<code>:order/mark-invoiced</code> derive their patch from the store and read neither. So a safety verification carries its approver into the SSoT and a dispatch or an invoice settlement does not. This console will not print an approver the store does not hold; for those rows the attribution exists only as the audit fact itself, which is <em>not</em> in the append-only ledger below.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Order</th><th>Approved by (resume payload)</th><th>Did this approval put the approver on the SSoT?</th></tr></thead>
+      <tbody>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-1</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-1, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:delivery/dispatch</code></td><td><code>ho-1</code></td><td>op-1</td><td><span class="warn">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row</td></tr>
+        <tr><td><code>:invoice/settle</code></td><td><code>ho-1</code></td><td>op-1</td><td><span class="warn">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row</td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-3</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-3, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-4</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-4, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-5</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-5, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-6</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-6, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:delivery/dispatch</code></td><td><code>ho-6</code></td><td>op-1</td><td><span class="warn">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row</td></tr>
+        <tr><td><code>:invoice/settle</code></td><td><code>ho-6</code></td><td>op-1</td><td><span class="warn">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row</td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-7</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-7, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:safety/verify</code></td><td><code>ho-8</code></td><td>op-1</td><td><span class="ok">yes</span> &middot; safety assessment for ho-8, <code>:approved-by</code> = <code>op-1</code></td></tr>
+        <tr><td><code>:delivery/dispatch</code></td><td><code>ho-8</code></td><td>op-1</td><td><span class="warn">no</span> &middot; nothing this approval wrote to the store carries an approver &mdash; the attribution survives only as the audit fact in this row</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
     <h2>Jurisdiction spec-basis</h2>
     <p class="muted">The jurisdictions the seeded orders actually reference, looked up in <code>housewaretrade.facts/catalog</code>. A jurisdiction with no entry has no spec-basis at all — the advisor must not invent one, and the governor holds if it tries.</p>
     <table>
