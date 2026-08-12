@@ -17,7 +17,14 @@
  :deps {io.github.kotoba-lang/langgraph
         {:local/root "../../kotoba-lang/langgraph"}
         io.github.kotoba-lang/langchain-store
-        {:local/root "../../kotoba-lang/langchain-store"}}
+        {:local/root "../../kotoba-lang/langchain-store"}
+        ;; デジタル庁デザインシステム(DADS) -- the workspace-wide base design
+        ;; system. Consumed as a GIT dep (not :local/root) so a standalone
+        ;; fork still resolves it; used only by `housewaretrade.render-html`
+        ;; for the operator-console stylesheet (`jp-go-dds.skin/dds+skin`).
+        io.github.kotoba-lang/jp-go-digital-design-system
+        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
+         :git/sha "83db99546eabc53613ae826ea41d1533a3c574af"}}
  :aliases
  {;; offline workspace dev -- pin transitive langchain to local checkout
   :dev {:override-deps
@@ -25,6 +32,11 @@
          {:local/root "../../kotoba-lang/langchain"}}}
   ;; clojure -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "housewaretrade.sim"]}
+  ;; clojure -M:dev:render-html [out-file] -> regenerate
+  ;; docs/samples/operator-console.html by driving the REAL actor stack
+  ;; (flagship checklist item 2). Refuses to write if the run produced no
+  ;; :governor-hold fact.
+  :render-html {:main-opts ["-m" "housewaretrade.render-html"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
