@@ -30,7 +30,7 @@
   real invoice itself (that is `housewaretrade.operation`'s
   `:delivery/dispatch`/`:invoice/settle`, always human-gated -- see
   README `Actuation`)."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn- unsigned-certificate
   "Every certificate this actor produces is UNSIGNED -- signature is
@@ -67,7 +67,7 @@
     (throw (ex-info "household-goods-dispatch: jurisdiction required" {})))
   (when (< sequence 0)
     (throw (ex-info "household-goods-dispatch: sequence must be >= 0" {})))
-  (let [dispatch-number (str (str/upper-case jurisdiction) "-DISPATCH-" (zero-pad sequence 6))
+  (let [dispatch-number (str (str/upper jurisdiction) "-DISPATCH-" (zero-pad sequence 6))
         record {"record_id" dispatch-number
                 "kind" "household-goods-dispatch-draft"
                 "household_order_id" household-order-id
@@ -93,7 +93,7 @@
     (throw (ex-info "household-goods-invoice: jurisdiction required" {})))
   (when (< sequence 0)
     (throw (ex-info "household-goods-invoice: sequence must be >= 0" {})))
-  (let [invoice-number (str (str/upper-case jurisdiction) "-INVOICE-" (zero-pad sequence 6))
+  (let [invoice-number (str (str/upper jurisdiction) "-INVOICE-" (zero-pad sequence 6))
         record {"record_id" invoice-number
                 "kind" "household-goods-invoice-draft"
                 "household_order_id" household-order-id
