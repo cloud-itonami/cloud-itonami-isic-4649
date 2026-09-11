@@ -328,7 +328,7 @@
   cleanly -- only `:open` blocks. See namespace docstring 'CRITICAL
   STRUCTURAL DECISION' for the full pre-shipment-certificate-vs-
   post-hoc-recall design reasoning, and
-  `test/housewaretrade/governor_contract_test.clj`'s
+  `test/housewaretrade/governor_contract_test.cljk`'s
   `recall-resolution-allows-dispatch-on-the-same-sku` for the end-to-end
   open -> resolved proof on the SAME order."
   [{:keys [op subject]} st]

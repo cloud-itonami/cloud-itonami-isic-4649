@@ -89,7 +89,7 @@ at any phase, by construction.** Two independent layers enforce this
 high-stakes gate and `housewaretrade.phase`'s phase table, which never
 puts either op in any phase's `:auto` set) -- see
 `housewaretrade.phase`'s docstring and
-`test/housewaretrade/phase_test.clj`'s
+`test/housewaretrade/phase_test.cljk`'s
 `delivery-dispatch-never-auto-at-any-phase`/
 `invoice-settle-never-auto-at-any-phase`. The actor may draft, check
 and recommend; a human trading supervisor is always the one who
@@ -234,14 +234,14 @@ robotics/identity/forms/dmn/bpmn/audit-ledger stack.
 
 | File | Role |
 |---|---|
-| `src/housewaretrade/store.cljc` | **Store** protocol -- `MemStore` ‖ `DatomicStore` (`langchain.db`) + append-only audit ledger + dispatch AND invoice history (dual history). The double-actuation guard checks dedicated `:dispatched?`/`:invoiced?` booleans rather than a `:status` value |
-| `src/housewaretrade/registry.cljc` | Dispatch/invoice draft records (record construction only -- the Consumer Product Safety Governor's checks are direct entity booleans/enum reads, so there are no pure range-check functions to host here) |
-| `src/housewaretrade/facts.cljc` | Per-jurisdiction generic counterparty-diligence catalog with an official spec-basis citation per entry, honest coverage reporting |
-| `src/housewaretrade/housewaretradeadvisor.cljc` | **HousewareTradeAdvisor** -- `mock-advisor` ‖ `llm-advisor`; intake/safety-verification/dispatch/invoice proposals |
-| `src/housewaretrade/governor.cljc` | **Consumer Product Safety Governor** -- 7 HARD checks (spec-basis · evidence-incomplete · credit-uncleared · contract-missing · children's-product-certificate-missing · active-recall-unresolved · counterparty-sanctions-flag-unresolved) + 2 double-actuation guards + 1 soft (confidence/actuation gate) |
-| `src/housewaretrade/phase.cljc` | **Phase 0→3** -- read-only → assisted intake → assisted verify → supervised (dispatch/invoice always human; order intake is the ONLY auto-eligible op, no direct capital risk) |
-| `src/housewaretrade/operation.cljc` | **OperationActor** -- langgraph StateGraph |
-| `src/housewaretrade/sim.cljc` | demo driver |
+| `src/housewaretrade/store.cljk` | **Store** protocol -- `MemStore` ‖ `DatomicStore` (`langchain.db`) + append-only audit ledger + dispatch AND invoice history (dual history). The double-actuation guard checks dedicated `:dispatched?`/`:invoiced?` booleans rather than a `:status` value |
+| `src/housewaretrade/registry.cljk` | Dispatch/invoice draft records (record construction only -- the Consumer Product Safety Governor's checks are direct entity booleans/enum reads, so there are no pure range-check functions to host here) |
+| `src/housewaretrade/facts.cljk` | Per-jurisdiction generic counterparty-diligence catalog with an official spec-basis citation per entry, honest coverage reporting |
+| `src/housewaretrade/housewaretradeadvisor.cljk` | **HousewareTradeAdvisor** -- `mock-advisor` ‖ `llm-advisor`; intake/safety-verification/dispatch/invoice proposals |
+| `src/housewaretrade/governor.cljk` | **Consumer Product Safety Governor** -- 7 HARD checks (spec-basis · evidence-incomplete · credit-uncleared · contract-missing · children's-product-certificate-missing · active-recall-unresolved · counterparty-sanctions-flag-unresolved) + 2 double-actuation guards + 1 soft (confidence/actuation gate) |
+| `src/housewaretrade/phase.cljk` | **Phase 0→3** -- read-only → assisted intake → assisted verify → supervised (dispatch/invoice always human; order intake is the ONLY auto-eligible op, no direct capital risk) |
+| `src/housewaretrade/operation.cljk` | **OperationActor** -- langgraph StateGraph |
+| `src/housewaretrade/sim.cljk` | demo driver |
 | `test/housewaretrade/*_test.clj` | governor contract · phase invariants · store parity · registry conformance · facts coverage |
 
 ## Business-process coverage (honest)

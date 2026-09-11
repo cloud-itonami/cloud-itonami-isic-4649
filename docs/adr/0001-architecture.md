@@ -170,7 +170,7 @@ at the point of dispatch.
 product -- with `:recall-status :open`) HARD-holds at
 `:delivery/dispatch`, proving the recall check is genuinely independent
 of Decision 4's children's-product gate.
-`test/housewaretrade/governor_contract_test.clj`'s
+`test/housewaretrade/governor_contract_test.cljk`'s
 `recall-resolution-allows-dispatch-on-the-same-sku` then proves the
 SAME order/SKU, once patched to `:recall-status :resolved` via a plain
 `:order/intake` upsert (the SAME low-stakes normalize-and-merge op
@@ -208,7 +208,7 @@ deliberately NOT such a guard despite superficially resembling one.
 `housewaretrade.store/Store` is implemented by both `MemStore` (atom-
 backed, default for dev/tests/demo) and `DatomicStore`
 (`langchain.db`-backed), proven to satisfy the same contract in
-`test/housewaretrade/store_contract_test.clj`. The ledger stays
+`test/housewaretrade/store_contract_test.cljk`. The ledger stays
 append-only on every backend: which household-order was verified for a
 jurisdiction with no official spec-basis, which counterparty had
 credit-uncleared / no contract / a missing Children's Product
@@ -326,7 +326,7 @@ true`, and `:required-technologies` includes `:robotics`.
   own single-check fold (which this build's Children's Product
   Certificate check most closely resembles).
 - `MemStore` || `DatomicStore` parity is proven by
-  `test/housewaretrade/store_contract_test.clj`.
+  `test/housewaretrade/store_contract_test.cljk`.
 - 41 tests / 217 assertions pass; lint is clean; the demo
   (`clojure -M:dev:run`) walks one clean dispatch + invoice lifecycle,
   the children's-product type-gating proof, the full active-recall

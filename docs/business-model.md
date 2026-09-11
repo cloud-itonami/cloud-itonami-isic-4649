@@ -78,7 +78,7 @@ Goods, ISIC 4649) and to the three `:social-impact` tags in
 `blueprint.edn` (`:consumer-safety`, `:child-safety`, `:transparency`).
 
 This is the rule the companion contract test
-(`test/housewaretrade/governor_contract_test.clj`) encodes end-to-end:
+(`test/housewaretrade/governor_contract_test.cljk`) encodes end-to-end:
 the HousewareTradeAdvisor never dispatches household goods to a
 counterparty or settles an invoice the Consumer Product Safety Governor
 would reject, `:delivery/dispatch` and `:invoice/settle` NEVER
@@ -309,7 +309,7 @@ override them) plus one SOFT gate, plus two double-actuation guards:
 `:recall-status` is operator-maintained in this R0: a compliance
 officer records a recall's discovery or resolution via the SAME
 `:order/intake` upsert path every other order-directory correction
-uses (`test/housewaretrade/governor_contract_test.clj`'s
+uses (`test/housewaretrade/governor_contract_test.cljk`'s
 `recall-resolution-allows-dispatch-on-the-same-sku` proves this
 end-to-end). A real CPSC recall-feed sync integration (automatically
 setting `:recall-status :open` from CPSC's own published recall data)
