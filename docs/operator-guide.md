@@ -111,7 +111,7 @@ again. This is a fundamentally different mechanic from the pre-shipment
 Children's Product Certificate check above -- see `docs/adr/
 0001-architecture.md` Decision 5 for the full reasoning.
 
-## Feel the Decision Gate: `clojure -M:dev:run`
+## Feel the Decision Gate: `kbb -M:dev:run`
 
 This vertical has no companion playable prototype. The fastest hands-on
 way to feel why the `:consumer-product-safety-governor` gate exists is
