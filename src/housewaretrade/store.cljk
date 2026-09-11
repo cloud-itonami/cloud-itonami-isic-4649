@@ -12,7 +12,7 @@
                         `langchain.db`'s `:db-api` (see langchain.kotoba-db).
 
   Both implement the same protocol and pass the same contract
-  (test/housewaretrade/store_contract_test.clj), which is the whole
+  (test/housewaretrade/store_contract_test.cljk), which is the whole
   point: the actor, the Consumer Product Safety Governor and the audit
   ledger never know which SSoT they run on.
 
@@ -142,7 +142,7 @@
       `:active-recall-unresolved` -- proving the recall flag blocks
       dispatch/invoice INDEPENDENTLY of the children's-product gate (a
       small appliance is never `:childrens-product?`, yet still HARD-
-      holds here). `test/housewaretrade/governor_contract_test.clj`'s
+      holds here). `test/housewaretrade/governor_contract_test.cljk`'s
       `recall-resolution-allows-dispatch-on-the-same-sku` further proves
       this SAME order, once its `:recall-status` is patched to
       `:resolved` via `:order/intake`, dispatches cleanly afterward --
