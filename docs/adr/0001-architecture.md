@@ -328,7 +328,7 @@ true`, and `:required-technologies` includes `:robotics`.
 - `MemStore` || `DatomicStore` parity is proven by
   `test/housewaretrade/store_contract_test.cljk`.
 - 41 tests / 217 assertions pass; lint is clean; the demo
-  (`clojure -M:dev:run`) walks one clean dispatch + invoice lifecycle,
+  (`kbb -M:dev:run`) walks one clean dispatch + invoice lifecycle,
   the children's-product type-gating proof, the full active-recall
   open -> resolved lifecycle proof on the SAME order/SKU, plus six other
   HARD-hold scenarios, end-to-end.

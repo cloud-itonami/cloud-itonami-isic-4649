@@ -1,5 +1,5 @@
 (ns housewaretrade.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a clean general household
+  "Demo driver -- `kbb -M:dev:run`. Walks a clean general household
   good through intake -> safety verification -> physical dispatch
   (escalate/approve/commit) -> invoice settlement (escalate/approve/
   commit), then shows HARD-hold scenarios: a jurisdiction with no

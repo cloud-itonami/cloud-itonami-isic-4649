@@ -404,7 +404,7 @@ discipline every sibling's own facts namespace follows):**
 ## Maturity
 
 `:implemented` -- `HousewareTradeAdvisor` + `Consumer Product Safety
-Governor` run as real, tested code (`clojure -M:dev:test`: see the
+Governor` run as real, tested code (`kbb -M:dev:test`: see the
 repository's own test-run output for current counts; lint clean),
 following the SAME governed-actor architecture as the other prior
 actors across this fleet, with its own distinct, independently-named
