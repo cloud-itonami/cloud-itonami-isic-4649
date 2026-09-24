@@ -1,0 +1,33 @@
+;; What this vertical's robot physically does, declared for
+;; kotoba.robotics.process (kotoba-lang/robotics). `kbb -M:dev:physics` runs it.
+;;
+;; README "Robotics premise": an AS/RS / robotic
+;; case-picking-and-palletizing shuttle stages housewares, small appliances
+;; and toys at the wholesale distribution-centre dock (ISIC 4649). The
+;; physical work: an arm palletizing appliance cartons, and the pallet
+;; shuttle stopping inside its protective field.
+;;
+;; Every number without a cited source is marked `estimate` in its :basis.
+;; Replacing an estimate with a sourced value is this bot's growth work.
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-4649"
+ :cases
+ [{:id :palletize-appliance-carton
+   :kind :manipulator
+   :procedure "case-picking arm lifts a small-appliance carton off the shuttle outfeed and stacks it on the outbound pallet"
+   :params {:l1-m 0.80 :l2-m 0.70 :m1-kg 15.0 :m2-kg 9.0
+            :from [1.00 0.10] :to [0.50 1.00] :duration-s 2.5 :steps 500}
+   :sweep {:param :payload-kg :values [3.0 6.0 10.0 15.0 25.0]}
+   :quantity :peak-tau1-nm
+   :limit {:max 250.0 :basis "estimate: continuous shoulder torque of a ~15 kg-payload case-picking arm with a 1.5 m reach"}
+   :boundary {:lo 0.5 :hi 80.0}}
+  {:id :pallet-shuttle-protective-stop
+   :kind :transport
+   :procedure "pallet shuttle carrying a 500 kg pallet to the dock brakes at 1.0 m/s2 when a person enters its scanner field; the cruise speed is swept"
+   :params {:mass-kg 900.0 :payload-kg 500.0 :distance-m 80.0 :a-max-mps2 0.5 :brake-decel-mps2 1.0
+            :drive-force-n 2000.0 :crr 0.015 :cog-height-m 0.40 :payload-cog-height-m 0.90
+            :support-half-length-m 0.55 :max-time-s 1200.0}
+   :sweep {:param :v-max-mps :values [0.8 1.0 1.2 1.5 2.0]}
+   :quantity :stopping-distance-m
+   :limit {:max 1.0 :basis "estimate: length of the shuttle's forward protective field on its safety laser scanner"}
+   :boundary {:lo 0.3 :hi 3.0}}]}
