@@ -22,7 +22,7 @@
       the same flag also blocks a LATER `:invoice/settle` if a recall
       newly opens after a clean dispatch, proving it is re-checked at
       BOTH actuation ops rather than a one-time pre-shipment gate."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langgraph.graph :as g]
             [housewaretrade.store :as store]
             [housewaretrade.operation :as op]))
